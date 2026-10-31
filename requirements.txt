@@ -1,0 +1,5 @@
+keyboard==0.13.5
+mouse==0.7.1
+pyperclip>=1.8
+pystray>=0.19
+Pillow>=10
