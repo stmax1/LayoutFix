@@ -3,7 +3,7 @@ import configparser
 import os
 
 APP_NAME = 'LayoutFix'
-APP_VERSION = '1.0.0'
+APP_VERSION = '1.0.1'
 
 CONFIG_DIR = os.path.join(os.environ.get('APPDATA') or os.path.expanduser('~'), APP_NAME)
 CONFIG_PATH = os.path.join(CONFIG_DIR, 'config.ini')

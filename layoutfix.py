@@ -6,6 +6,8 @@
   Scroll Lock   — исправить всю набранную фразу (с момента последнего Enter/клика)
 """
 import ctypes
+import logging
+import logging.handlers
 import ctypes.wintypes as wt
 import os
 import queue
@@ -21,7 +23,8 @@ import pyperclip
 import pystray
 from PIL import Image
 
-from config import APP_NAME, APP_VERSION, is_first_run, load_hotkeys, save_hotkeys
+from config import (APP_NAME, APP_VERSION, CONFIG_DIR, is_first_run, load_hotkeys,
+                    save_hotkeys)
 from layout_map import KEYS, SPACE_SC, convert_text, render
 from settings_ui import SettingsWindow, normalize_hotkey, pretty, validate_hotkey
 
@@ -55,6 +58,19 @@ EVENT_MODIFY_STATE = 0x0002
 SHOW_EVENT = 'Local\\LayoutFixShowSettings'
 
 
+LOG_PATH = os.path.join(CONFIG_DIR, 'log.txt')
+log = logging.getLogger(APP_NAME)
+
+
+def setup_logging():
+    os.makedirs(CONFIG_DIR, exist_ok=True)
+    h = logging.handlers.RotatingFileHandler(LOG_PATH, maxBytes=300_000, backupCount=1,
+                                             encoding='utf-8')
+    h.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(message)s'))
+    log.addHandler(h)
+    log.setLevel(logging.INFO)
+
+
 def resource(name):
     base = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
     return os.path.join(base, name)
@@ -85,7 +101,11 @@ def find_layout(primary_lang):
 def switch_layout(ru):
     hkl = find_layout(LANG_RU if ru else LANG_EN)
     if hkl:
-        user32.PostMessageW(user32.GetForegroundWindow(), WM_INPUTLANGCHANGEREQUEST, 0, hkl)
+        try:
+            user32.PostMessageW(user32.GetForegroundWindow(), WM_INPUTLANGCHANGEREQUEST, 0,
+                                ctypes.c_ssize_t(hkl).value)
+        except Exception:
+            log.exception('switch_layout')
 
 
 # ---------- автозапуск ----------
@@ -125,7 +145,10 @@ def set_autostart(on):
 # ---------- основная логика ----------
 
 class Switcher:
-    MODIFIER_NAMES = {'shift', 'left shift', 'right shift', 'caps lock'}
+    # сами модификаторы буфер не трогают (иначе Ctrl в Ctrl+Alt+X сбрасывал бы слово)
+    MODIFIER_NAMES = {'shift', 'left shift', 'right shift', 'ctrl', 'left ctrl', 'right ctrl',
+                      'alt', 'left alt', 'right alt', 'alt gr', 'windows', 'left windows',
+                      'right windows', 'caps lock', 'fn'}
 
     def __init__(self):
         self.hotkeys = {}
@@ -178,6 +201,12 @@ class Switcher:
             self.buf.clear()
 
     def on_key(self, e):
+        try:
+            self._on_key(e)
+        except Exception:
+            log.exception('on_key')
+
+    def _on_key(self, e):
         if e.event_type != 'down' or self.busy:
             return
         name = (e.name or '').lower()
@@ -213,6 +242,7 @@ class Switcher:
 
     # --- выполнение команд ---
     def request(self, action):
+        log.info('hotkey: %s (enabled=%s, buffer=%d)', action, self.enabled, len(self.buf))
         if self.enabled:
             self.q.put(action)
 
@@ -222,8 +252,8 @@ class Switcher:
             try:
                 self._wait_modifiers_released()
                 getattr(self, 'do_' + action)()
-            except Exception as ex:  # не роняем программу из-за одного сбоя
-                print('Ошибка:', ex, file=sys.stderr)
+            except Exception:  # не роняем программу из-за одного сбоя
+                log.exception('action %s', action)
 
     @staticmethod
     def _wait_modifiers_released(timeout=1.5):
@@ -235,6 +265,7 @@ class Switcher:
     def _retype(self, segment):
         target_ru = not is_ru_now()
         text = render(segment, target_ru)
+        log.info('retype %d chars -> %s', len(segment), 'RU' if target_ru else 'EN')
         self.busy = True
         try:
             for _ in segment:
@@ -256,6 +287,8 @@ class Switcher:
         segment = buf[i:]
         if any(sc != SPACE_SC for sc, _, _ in segment):
             self._retype(segment)
+        else:
+            log.info('word: буфер пуст — нечего исправлять')
 
     def do_phrase(self):
         with self.lock:
@@ -280,6 +313,7 @@ class Switcher:
                 if text:
                     break
             if not text:
+                log.info('selection: не удалось получить выделенный текст')
                 return
             text = text.replace('\r\n', '\n')
             new_text, target_ru = convert_text(text)
@@ -308,6 +342,7 @@ class Switcher:
             try:
                 self.set_hotkeys({**self.hotkeys, action: hk})
             except Exception:
+                log.exception('hotkey %s=%r', action, hk)
                 bad[action] = hk
                 self.hotkeys[action] = ''
         return bad
@@ -330,13 +365,18 @@ def main():
         pass
 
     first_run = is_first_run()
-    hotkeys = {a: normalize_hotkey(hk) for a, hk in load_hotkeys().items()}
-    hotkeys = {a: ('' if validate_hotkey(hk) else hk) for a, hk in hotkeys.items()}
-    if first_run:
+    setup_logging()
+    log.info('start %s', APP_VERSION)
+    raw = {a: normalize_hotkey(hk) for a, hk in load_hotkeys().items()}
+    hotkeys = {a: ('' if validate_hotkey(hk) else hk) for a, hk in raw.items()}
+    rejected = {a: hk for a, hk in raw.items() if hk != hotkeys[a]}
+    if first_run or rejected:
         save_hotkeys(hotkeys)
+    log.info('hotkeys: %s', hotkeys)
 
     sw = Switcher()
     bad = sw.start(hotkeys)
+    bad.update(rejected)
 
     root = tk.Tk()
     root.withdraw()
@@ -396,6 +436,7 @@ def main():
         pystray.Menu.SEPARATOR,
         pystray.MenuItem('Включено', toggle_enabled, checked=lambda _: sw.enabled),
         pystray.MenuItem('Настройки…', lambda *_: ui_q.put(open_settings), default=True),
+        pystray.MenuItem('Открыть журнал', lambda *_: os.startfile(LOG_PATH)),
         pystray.MenuItem('Выход', quit_app),
     )
     icon = pystray.Icon(APP_NAME, icon_img, f'{APP_NAME}\n{hint()}'[:127], menu)
@@ -403,7 +444,7 @@ def main():
     def on_ready(icon_):
         icon_.visible = True
         if bad:
-            icon_.notify('Некоторые сочетания не удалось назначить — проверьте настройки.',
+            icon_.notify('Некоторые сочетания были неудачными и сброшены — назначьте заново.',
                          APP_NAME)
             ui_q.put(open_settings)
         elif first_run:

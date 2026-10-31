@@ -10,7 +10,8 @@ from layout_map import RU2EN
 MODIFIERS = {'ctrl', 'alt', 'shift', 'windows', 'left ctrl', 'right ctrl', 'left alt',
              'right alt', 'left shift', 'right shift', 'left windows', 'right windows', 'alt gr'}
 STRONG_MODIFIERS = {'ctrl', 'alt', 'windows'}
-TYPING_KEYS = {'space', 'enter', 'tab', 'backspace', 'delete'}
+TYPING_KEYS = {'space', 'enter', 'tab', 'backspace', 'delete', 'left', 'right', 'up', 'down',
+               'home', 'end', 'page up', 'page down', 'insert'}
 
 
 def normalize_hotkey(hk):
@@ -43,7 +44,7 @@ def validate_hotkey(hk):
         return 'Esc зарезервирован для отмены.'
     printable = all(len(k) == 1 or k in TYPING_KEYS for k in keys)
     if printable and not (mods & STRONG_MODIFIERS):
-        return ('Такое сочетание будет мешать обычному набору текста.\n'
+        return ('Такое сочетание будет мешать обычному набору и редактированию текста.\n'
                 'Добавьте Ctrl, Alt или Win, либо выберите Pause, Scroll Lock, F1–F12 и т.п.')
     return None
 
@@ -89,8 +90,11 @@ class SettingsWindow:
             ttk.Button(frm, text='Отключить', command=lambda a=action: self.set_value(a, '')).grid(
                 row=i, column=3)
 
-        self.hint = ttk.Label(frm, foreground='#555',
-                              text='«Изменить» → нажмите нужное сочетание. Esc — отмена.')
+        self.hint = ttk.Label(frm, foreground='#555', justify='left',
+                              text='«Изменить» → нажмите нужное сочетание. Esc — отмена.\n'
+                                   'Для ноутбука удобно: Caps Lock, Shift+Caps Lock, '
+                                   'Ctrl+Alt+Space.\nF1–F12 на ноутбуке может понадобиться '
+                                   'нажимать вместе с Fn.')
         self.hint.grid(row=4, column=0, columnspan=4, sticky='w', pady=(10, 6))
 
         self.autostart_var = tk.BooleanVar(value=autostart_get())
